@@ -1,0 +1,6 @@
+{
+  "name": "EduSantri MTs Ibad Ar Rahman",
+  "description": "Sistem Jurnal dan Pendataan Santri MTs Ibad Ar Rahman",
+  "requestFramePermissions": ["camera"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+@layer base {
+  *, ::before, ::after {
+    box-sizing: border-box;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden !important;
+    -webkit-tap-highlight-color: transparent;
+    font-size: 16px;
+    scroll-behavior: smooth;
+  }
+
+  #root {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden !important;
+  }
+
+  /* Force minimum 16px font size on form controls for mobile readability and to prevent auto-zoom on iOS/Android */
+  input, select, textarea {
+    font-size: 16px !important;
+  }
+
+  /* Smooth custom horizontal scrollbars inside table wrappers without page-level overflow */
+  .custom-scrollbar::-webkit-scrollbar {
+    height: 6px;
+    width: 6px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-track {
+    background: rgba(241, 245, 249, 0.8);
+    border-radius: 9999px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb {
+    background: rgba(203, 213, 225, 0.8);
+    border-radius: 9999px;
+  }
+  .custom-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: rgba(148, 163, 184, 1);
+  }
+}
+
+/* Touch Friendly Target Classes */
+@layer utilities {
+  .touch-target {
+    min-height: 44px;
+    min-width: 44px;
+  }
+}

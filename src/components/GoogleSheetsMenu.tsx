@@ -130,7 +130,7 @@ export const GoogleSheetsMenu: React.FC<GoogleSheetsMenuProps> = ({
           `Domain "${hostname}" belum diizinkan (Authorized Domain) di Firebase Console.\n\n` +
           `Langkah Penyelesaian:\n` +
           `1. Buka Firebase Console (https://console.firebase.google.com)\n` +
-          `2. Pilih project Firebase: jurnal-iribs-v2\n` +
+          `2. Pilih project Firebase: decoded-heaven-2r4g1\n` +
           `3. Buka menu Authentication -> Settings (Setelan) -> Authorized domains (Domain Otorisasi)\n` +
           `4. Klik "Add domain" (Tambah domain) dan tambahkan: ${hostname} (serta "iribs.sch.id")\n` +
           `5. Klik Simpan, lalu coba klik Hubungkan Google kembali.`,
@@ -929,7 +929,14 @@ export const GoogleSheetsMenu: React.FC<GoogleSheetsMenuProps> = ({
 
   // --- IMPORT FUNCTIONS ---
 
-  const importData = async (key: string, title: string, columnHeaders: string[], handleParsedRows: (rows: string[][]) => void) => {
+  const importData = async (
+    key: string,
+    title: string,
+    columnHeaders: string[],
+    handleParsedRows: (rows: string[][]) => void,
+    localCount: number = 0,
+    onAutoExport?: () => Promise<any> | void
+  ) => {
     if (!accessToken) {
       showStatus('Hubungkan ke Google terlebih dahulu.', true);
       return;
@@ -961,7 +968,7 @@ export const GoogleSheetsMenu: React.FC<GoogleSheetsMenuProps> = ({
           const detailMsg = await getGoogleErrorMessage(response, 'Akun Google Anda tidak memiliki akses membaca ke spreadsheet ini. Pastikan Anda telah memberikan izin penuh untuk Google Sheets saat masuk.');
           throw new Error(`Izin ditolak (403). ${detailMsg}`);
         }
-        const fallbackMsg = await getGoogleErrorMessage(response, `Gagal membaca tab "${title}" (Status: ${response.status}). Pastikan tab tersebut ada.`);
+        const fallbackMsg = await getGoogleErrorMessage(response, `Gagal membaca tab "${title}" (Status: ${response.status}). Pastikan tab tersebut ada di Google Spreadsheet.`);
         throw new Error(fallbackMsg);
       }
 
@@ -969,26 +976,50 @@ export const GoogleSheetsMenu: React.FC<GoogleSheetsMenuProps> = ({
       const values: string[][] = data.values || [];
 
       if (values.length < 2) {
-        throw new Error(`Data di tab "${title}" kosong atau kurang dari 2 baris (butuh baris header & data).`);
+        if (localCount > 0 && onAutoExport) {
+          const autoExportDecision = window.confirm(
+            `Data di tab "${title}" Google Sheets saat ini kosong / kurang dari 2 baris.\n\nAplikasi lokal Anda saat ini memiliki ${localCount} data "${title}". Apakah Anda ingin MENGEKSPOR (mengunggah) data lokal ini ke Google Sheets sekarang agar tab terisi?`
+          );
+          if (autoExportDecision) {
+            await onAutoExport();
+            return;
+          }
+        }
+        throw new Error(
+          `Data di tab "${title}" kosong atau kurang dari 2 baris (butuh baris header & minimal 1 baris data).\n\nPetunjuk Solusi:\n1. Jika ingin mengisi Google Sheets dari aplikasi, klik tombol "Ekspor ${title}".\n2. Jika ingin mengisi lewat Google Sheets, buka file spreadsheet dan tambahkan baris data di bawah header.`
+        );
       }
 
-      const fileHeaders = values[0].map(h => h.trim().toLowerCase());
-      
-      // Check if critical columns are present
-      const missing = columnHeaders.filter(col => !fileHeaders.includes(col.toLowerCase()));
-      if (missing.length > 0) {
-        throw new Error(`Format kolom tab "${title}" tidak sesuai. Kolom hilang: ${missing.join(', ')}`);
+      // Flexible header normalization & alias matching
+      const normalize = (str: string) => str.trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+      const normalizedFileHeaders = values[0].map(h => normalize(h));
+
+      const findColIdx = (colKey: string) => {
+        const normKey = normalize(colKey);
+        let idx = normalizedFileHeaders.indexOf(normKey);
+        if (idx !== -1) return idx;
+
+        // Common aliases matching
+        if (colKey === 'mata_pelajaran') {
+          idx = normalizedFileHeaders.findIndex(h => h.includes('mapel') || h.includes('matapelajaran') || h.includes('pelajaran'));
+        } else if (colKey.startsWith('id_')) {
+          idx = normalizedFileHeaders.findIndex(h => h === 'id' || h.startsWith('id'));
+        }
+        return idx;
+      };
+
+      const missingCols = columnHeaders.filter(col => findColIdx(col) === -1);
+      if (missingCols.length > 0) {
+        throw new Error(`Format kolom tab "${title}" tidak sesuai. Kolom hilang: ${missingCols.join(', ')}. Silakan lakukan 'Ekspor ${title}' terlebih dahulu untuk membuat ulang header yang sesuai.`);
       }
 
       // Pass the remaining data rows to the individual parser
       const dataRows = values.slice(1);
-      
-      // Determine columns indices mapping
-      const headerIndices = columnHeaders.map(col => fileHeaders.indexOf(col.toLowerCase()));
+      const headerIndices = columnHeaders.map(col => findColIdx(col));
 
       // Maps values to standardized columns
       const mappedRows = dataRows.map(row => {
-        return headerIndices.map(idx => (row[idx] !== undefined ? row[idx].toString() : ''));
+        return headerIndices.map(idx => (idx !== -1 && row[idx] !== undefined ? row[idx].toString() : ''));
       });
 
       handleParsedRows(mappedRows);
@@ -1002,303 +1033,436 @@ export const GoogleSheetsMenu: React.FC<GoogleSheetsMenuProps> = ({
 
   const handleImportSiswa = () => {
     const cols = ['id_siswa', 'nama_siswa', 'kelas', 'jenis_kelamin', 'nama_wali'];
-    importData('siswa', 'Siswa', cols, (rows) => {
-      const newList: Siswa[] = rows.map(r => ({
-        id_siswa: r[0],
-        nama_siswa: r[1],
-        kelas: r[2],
-        jenis_kelamin: r[3] || 'Laki-laki',
-        nama_wali: r[4] || '-'
-      })).filter(s => s.id_siswa && s.nama_siswa);
+    importData(
+      'siswa',
+      'Siswa',
+      cols,
+      (rows) => {
+        const newList: Siswa[] = rows
+          .map((r, idx) => ({
+            id_siswa: r[0] || `S_${Date.now()}_${idx}`,
+            nama_siswa: r[1],
+            kelas: r[2] || '7A',
+            jenis_kelamin: r[3] || 'Laki-laki',
+            nama_wali: r[4] || '-'
+          }))
+          .filter(s => s.nama_siswa && s.nama_siswa.trim() !== '');
 
-      const decision = window.confirm(`Berhasil membaca ${newList.length} data Santri. Tekan OK untuk menimpa semua data lokal, atau CANCEL untuk menggabungkan.`);
-      if (decision) {
-        onUpdateSiswa(newList);
-        showStatus(`Data Santri berhasil ditimpa dengan ${newList.length} santri baru dari Google Sheets!`, false);
-      } else {
-        const merged = [...siswa];
-        newList.forEach(n => {
-          const idx = merged.findIndex(m => m.id_siswa === n.id_siswa);
-          if (idx > -1) {
-            merged[idx] = n; // update
-          } else {
-            merged.push(n); // insert
-          }
-        });
-        onUpdateSiswa(merged);
-        showStatus(`Data Santri digabungkan! Total sekarang: ${merged.length} santri.`, false);
-      }
-    });
+        if (newList.length === 0) {
+          showStatus(`Tidak ada baris data Santri valid yang ditemukan di tab "Siswa". Pastikan kolom nama_siswa terisi.`, true);
+          return;
+        }
+
+        const decision = window.confirm(`Berhasil membaca ${newList.length} data Santri dari Google Sheets. Tekan OK untuk MENIMPA semua data lokal, atau CANCEL untuk MENGGABUNGKAN.`);
+        if (decision) {
+          onUpdateSiswa(newList);
+          showStatus(`Data Santri berhasil ditimpa dengan ${newList.length} santri baru dari Google Sheets!`, false);
+        } else {
+          const merged = [...siswa];
+          newList.forEach(n => {
+            const idx = merged.findIndex(m => m.id_siswa === n.id_siswa || m.nama_siswa.toLowerCase() === n.nama_siswa.toLowerCase());
+            if (idx > -1) {
+              merged[idx] = n;
+            } else {
+              merged.push(n);
+            }
+          });
+          onUpdateSiswa(merged);
+          showStatus(`Data Santri digabungkan! Total sekarang: ${merged.length} santri.`, false);
+        }
+      },
+      siswa.length,
+      handleExportSiswa
+    );
   };
 
   const handleImportJurnal = () => {
     const cols = ['id_jurnal', 'tanggal', 'nama_guru', 'mata_pelajaran', 'kelas', 'jam_ke', 'materi', 'uraian_pembelajaran', 'siswa_sakit', 'siswa_izin', 'siswa_alpa', 'catatan', 'foto_1', 'foto_2'];
-    importData('jurnal', 'Jurnal_Guru', cols, (rows) => {
-      const newList: Jurnal[] = rows.map(r => ({
-        id_jurnal: r[0],
-        tanggal: r[1],
-        nama_guru: r[2],
-        mata_pelajaran: r[3],
-        kelas: r[4],
-        jam_ke: r[5],
-        materi: r[6],
-        uraian_pembelajaran: r[7],
-        siswa_sakit: r[8] || '-',
-        siswa_izin: r[9] || '-',
-        siswa_alpa: r[10] || '-',
-        catatan: r[11] || '-',
-        foto_1: r[12] || '',
-        foto_2: r[13] || ''
-      })).filter(j => j.id_jurnal && j.nama_guru);
+    importData(
+      'jurnal',
+      'Jurnal_Guru',
+      cols,
+      (rows) => {
+        const newList: Jurnal[] = rows
+          .map((r, idx) => ({
+            id_jurnal: r[0] || `jurnal_${Date.now()}_${idx}`,
+            tanggal: r[1] || new Date().toISOString().substring(0, 10),
+            nama_guru: r[2] || 'Guru',
+            mata_pelajaran: r[3] || 'Mapel',
+            kelas: r[4] || '7A',
+            jam_ke: r[5] || '1',
+            materi: r[6] || '-',
+            uraian_pembelajaran: r[7] || '-',
+            siswa_sakit: r[8] || '-',
+            siswa_izin: r[9] || '-',
+            siswa_alpa: r[10] || '-',
+            catatan: r[11] || '-',
+            foto_1: r[12] || '',
+            foto_2: r[13] || ''
+          }))
+          .filter(j => j.id_jurnal && (j.nama_guru || j.materi || j.uraian_pembelajaran));
 
-      const decision = window.confirm(`Berhasil membaca ${newList.length} Jurnal. Tekan OK untuk menimpa semua data lokal, atau CANCEL untuk menggabungkan.`);
-      if (decision) {
-        onUpdateJurnal(newList);
-        showStatus(`Jurnal berhasil ditimpa dengan ${newList.length} entri baru!`, false);
-      } else {
-        const merged = [...jurnal];
-        newList.forEach(n => {
-          const idx = merged.findIndex(m => m.id_jurnal === n.id_jurnal);
-          if (idx > -1) {
-            merged[idx] = n;
-          } else {
-            merged.push(n);
-          }
-        });
-        onUpdateJurnal(merged);
-        showStatus(`Jurnal digabungkan! Total sekarang: ${merged.length} entri.`, false);
-      }
-    });
+        if (newList.length === 0) {
+          showStatus(`Tidak ada baris data valid yang ditemukan di tab "Jurnal_Guru". Pastikan kolom nama_guru / materi terisi.`, true);
+          return;
+        }
+
+        const decision = window.confirm(`Berhasil membaca ${newList.length} Jurnal dari Google Sheets. Tekan OK untuk MENIMPA semua data lokal, atau CANCEL untuk MENGGABUNGKAN.`);
+        if (decision) {
+          onUpdateJurnal(newList);
+          showStatus(`Jurnal berhasil ditimpa dengan ${newList.length} entri baru dari Google Sheets!`, false);
+        } else {
+          const merged = [...jurnal];
+          newList.forEach(n => {
+            const idx = merged.findIndex(m => m.id_jurnal === n.id_jurnal);
+            if (idx > -1) {
+              merged[idx] = n;
+            } else {
+              merged.push(n);
+            }
+          });
+          onUpdateJurnal(merged);
+          showStatus(`Jurnal digabungkan! Total sekarang: ${merged.length} entri.`, false);
+        }
+      },
+      jurnal.length,
+      handleExportJurnal
+    );
   };
 
   const handleImportPerkembangan = () => {
     const cols = ['id_catatan', 'tanggal', 'id_siswa', 'nama_guru', 'mata_pelajaran', 'kategori', 'deskripsi_perkembangan'];
-    importData('perkembangan', 'Catatan_Perkembangan', cols, (rows) => {
-      const newList: CatatanPerkembangan[] = rows.map(r => ({
-        id_catatan: r[0],
-        tanggal: r[1],
-        id_siswa: r[2],
-        nama_guru: r[3],
-        mata_pelajaran: r[4],
-        kategori: r[5] as any || 'Akademik',
-        deskripsi_perkembangan: r[6]
-      })).filter(p => p.id_catatan && p.id_siswa);
+    importData(
+      'perkembangan',
+      'Catatan_Perkembangan',
+      cols,
+      (rows) => {
+        const newList: CatatanPerkembangan[] = rows
+          .map((r, idx) => ({
+            id_catatan: r[0] || `perkembangan_${Date.now()}_${idx}`,
+            tanggal: r[1] || new Date().toISOString().substring(0, 10),
+            id_siswa: r[2] || '',
+            nama_guru: r[3] || 'Guru',
+            mata_pelajaran: r[4] || 'Umum',
+            kategori: (r[5] as any) || 'Akademik',
+            deskripsi_perkembangan: r[6] || '-'
+          }))
+          .filter(p => p.deskripsi_perkembangan && p.deskripsi_perkembangan !== '-');
 
-      const decision = window.confirm(`Berhasil membaca ${newList.length} Catatan Akademik. Tekan OK untuk menimpa data lokal, atau CANCEL untuk menggabungkan.`);
-      if (decision) {
-        onUpdatePerkembangan(newList);
-        showStatus(`Catatan Akademik berhasil ditimpa!`, false);
-      } else {
-        const merged = [...perkembangan];
-        newList.forEach(n => {
-          const idx = merged.findIndex(m => m.id_catatan === n.id_catatan);
-          if (idx > -1) merged[idx] = n;
-          else merged.push(n);
-        });
-        onUpdatePerkembangan(merged);
-        showStatus(`Catatan Akademik digabungkan! Total: ${merged.length} entri.`, false);
-      }
-    });
+        if (newList.length === 0) {
+          showStatus(`Tidak ada Catatan Akademik valid yang dapat diimpor dari Google Sheets.`, true);
+          return;
+        }
+
+        const decision = window.confirm(`Berhasil membaca ${newList.length} Catatan Akademik. Tekan OK untuk MENIMPA data lokal, atau CANCEL untuk MENGGABUNGKAN.`);
+        if (decision) {
+          onUpdatePerkembangan(newList);
+          showStatus(`Catatan Akademik berhasil ditimpa!`, false);
+        } else {
+          const merged = [...perkembangan];
+          newList.forEach(n => {
+            const idx = merged.findIndex(m => m.id_catatan === n.id_catatan);
+            if (idx > -1) merged[idx] = n;
+            else merged.push(n);
+          });
+          onUpdatePerkembangan(merged);
+          showStatus(`Catatan Akademik digabungkan! Total: ${merged.length} entri.`, false);
+        }
+      },
+      perkembangan.length,
+      handleExportPerkembangan
+    );
   };
 
   const handleImportPerilaku = () => {
     const cols = ['id_catatan', 'tanggal', 'id_siswa', 'nama_guru', 'mata_pelajaran', 'jenis_perilaku', 'deskripsi_perilaku', 'tindak_lanjut'];
-    importData('perilaku', 'Catatan_Perilaku', cols, (rows) => {
-      const newList: CatatanPerilaku[] = rows.map(r => ({
-        id_catatan: r[0],
-        tanggal: r[1],
-        id_siswa: r[2],
-        nama_guru: r[3],
-        mata_pelajaran: r[4],
-        jenis_perilaku: r[5] as any || 'Positif',
-        deskripsi_perilaku: r[6],
-        tindak_lanjut: r[7] || '-'
-      })).filter(p => p.id_catatan && p.id_siswa);
+    importData(
+      'perilaku',
+      'Catatan_Perilaku',
+      cols,
+      (rows) => {
+        const newList: CatatanPerilaku[] = rows
+          .map((r, idx) => ({
+            id_catatan: r[0] || `perilaku_${Date.now()}_${idx}`,
+            tanggal: r[1] || new Date().toISOString().substring(0, 10),
+            id_siswa: r[2] || '',
+            nama_guru: r[3] || 'Guru',
+            mata_pelajaran: r[4] || 'Umum',
+            jenis_perilaku: (r[5] as any) || 'Positif',
+            deskripsi_perilaku: r[6] || '-',
+            tindak_lanjut: r[7] || '-'
+          }))
+          .filter(p => p.deskripsi_perilaku && p.deskripsi_perilaku !== '-');
 
-      const decision = window.confirm(`Berhasil membaca ${newList.length} Catatan Adab. Tekan OK untuk menimpa data lokal, atau CANCEL untuk menggabungkan.`);
-      if (decision) {
-        onUpdatePerilaku(newList);
-        showStatus(`Catatan Adab berhasil ditimpa!`, false);
-      } else {
-        const merged = [...perilaku];
-        newList.forEach(n => {
-          const idx = merged.findIndex(m => m.id_catatan === n.id_catatan);
-          if (idx > -1) merged[idx] = n;
-          else merged.push(n);
-        });
-        onUpdatePerilaku(merged);
-        showStatus(`Catatan Adab digabungkan! Total: ${merged.length} entri.`, false);
-      }
-    });
+        if (newList.length === 0) {
+          showStatus(`Tidak ada Catatan Adab valid yang dapat diimpor dari Google Sheets.`, true);
+          return;
+        }
+
+        const decision = window.confirm(`Berhasil membaca ${newList.length} Catatan Adab. Tekan OK untuk MENIMPA data lokal, atau CANCEL untuk MENGGABUNGKAN.`);
+        if (decision) {
+          onUpdatePerilaku(newList);
+          showStatus(`Catatan Adab berhasil ditimpa!`, false);
+        } else {
+          const merged = [...perilaku];
+          newList.forEach(n => {
+            const idx = merged.findIndex(m => m.id_catatan === n.id_catatan);
+            if (idx > -1) merged[idx] = n;
+            else merged.push(n);
+          });
+          onUpdatePerilaku(merged);
+          showStatus(`Catatan Adab digabungkan! Total: ${merged.length} entri.`, false);
+        }
+      },
+      perilaku.length,
+      handleExportPerilaku
+    );
   };
 
   const handleImportHomeVisit = () => {
     const cols = ['id_kunjungan', 'tanggal', 'id_siswa', 'nama_guru', 'alasan_kunjungan', 'hasil_kunjungan', 'tindak_lanjut', 'foto_1', 'foto_2'];
-    importData('homeVisit', 'Home_Visit', cols, (rows) => {
-      const newList: HomeVisit[] = rows.map(r => ({
-        id_kunjungan: r[0],
-        tanggal: r[1],
-        id_siswa: r[2],
-        nama_guru: r[3],
-        alasan_kunjungan: r[4],
-        hasil_kunjungan: r[5],
-        tindak_lanjut: r[6] || '-',
-        foto_1: r[7] || '',
-        foto_2: r[8] || ''
-      })).filter(h => h.id_kunjungan && h.id_siswa);
+    importData(
+      'homeVisit',
+      'Home_Visit',
+      cols,
+      (rows) => {
+        const newList: HomeVisit[] = rows
+          .map((r, idx) => ({
+            id_kunjungan: r[0] || `visit_${Date.now()}_${idx}`,
+            tanggal: r[1] || new Date().toISOString().substring(0, 10),
+            id_siswa: r[2] || '',
+            nama_guru: r[3] || 'Guru',
+            alasan_kunjungan: r[4] || '-',
+            hasil_kunjungan: r[5] || '-',
+            tindak_lanjut: r[6] || '-',
+            foto_1: r[7] || '',
+            foto_2: r[8] || ''
+          }))
+          .filter(h => h.alasan_kunjungan && h.alasan_kunjungan !== '-');
 
-      const decision = window.confirm(`Berhasil membaca ${newList.length} Home Visit. Tekan OK untuk menimpa, atau CANCEL untuk menggabungkan.`);
-      if (decision) {
-        onUpdateHomeVisit(newList);
-        showStatus(`Catatan Home Visit berhasil ditimpa!`, false);
-      } else {
-        const merged = [...homeVisit];
-        newList.forEach(n => {
-          const idx = merged.findIndex(m => m.id_kunjungan === n.id_kunjungan);
-          if (idx > -1) merged[idx] = n;
-          else merged.push(n);
-        });
-        onUpdateHomeVisit(merged);
-        showStatus(`Data Home Visit digabungkan!`, false);
-      }
-    });
+        if (newList.length === 0) {
+          showStatus(`Tidak ada Catatan Home Visit valid yang dapat diimpor dari Google Sheets.`, true);
+          return;
+        }
+
+        const decision = window.confirm(`Berhasil membaca ${newList.length} Home Visit. Tekan OK untuk MENIMPA, atau CANCEL untuk MENGGABUNGKAN.`);
+        if (decision) {
+          onUpdateHomeVisit(newList);
+          showStatus(`Catatan Home Visit berhasil ditimpa!`, false);
+        } else {
+          const merged = [...homeVisit];
+          newList.forEach(n => {
+            const idx = merged.findIndex(m => m.id_kunjungan === n.id_kunjungan);
+            if (idx > -1) merged[idx] = n;
+            else merged.push(n);
+          });
+          onUpdateHomeVisit(merged);
+          showStatus(`Data Home Visit digabungkan!`, false);
+        }
+      },
+      homeVisit.length,
+      handleExportHomeVisit
+    );
   };
 
   const handleImportUsers = () => {
     const cols = ['id_user', 'username', 'password', 'role', 'nama_lengkap', 'id_referensi', 'status'];
-    importData('users', 'Users', cols, (rows) => {
-      const newList: User[] = rows.map(r => ({
-        id_user: r[0],
-        username: r[1],
-        password: r[2] || '',
-        role: r[3] as any || 'guru',
-        nama_lengkap: r[4],
-        id_referensi: r[5] || '',
-        status: r[6] as any || 'Aktif'
-      })).filter(u => u.id_user && u.username);
+    importData(
+      'users',
+      'Users',
+      cols,
+      (rows) => {
+        const newList: User[] = rows
+          .map((r, idx) => ({
+            id_user: r[0] || `usr_${Date.now()}_${idx}`,
+            username: r[1],
+            password: r[2] || '',
+            role: (r[3] as any) || 'guru',
+            nama_lengkap: r[4] || r[1],
+            id_referensi: r[5] || '',
+            status: (r[6] as any) || 'Aktif'
+          }))
+          .filter(u => u.username && u.username.trim() !== '');
 
-      const decision = window.confirm(`Berhasil membaca ${newList.length} data Pengguna. Tekan OK untuk menimpa semua data lokal, atau CANCEL untuk menggabungkan.`);
-      if (decision) {
-        onUpdateUsers(newList);
-        showStatus(`Data Pengguna berhasil ditimpa!`, false);
-      } else {
-        const merged = [...users];
-        newList.forEach(n => {
-          const idx = merged.findIndex(m => m.id_user === n.id_user);
-          if (idx > -1) merged[idx] = n;
-          else merged.push(n);
-        });
-        onUpdateUsers(merged);
-        showStatus(`Data Pengguna digabungkan!`, false);
-      }
-    });
+        if (newList.length === 0) {
+          showStatus(`Tidak ada data Pengguna valid yang dapat diimpor dari Google Sheets.`, true);
+          return;
+        }
+
+        const decision = window.confirm(`Berhasil membaca ${newList.length} data Pengguna. Tekan OK untuk MENIMPA semua data lokal, atau CANCEL untuk MENGGABUNGKAN.`);
+        if (decision) {
+          onUpdateUsers(newList);
+          showStatus(`Data Pengguna berhasil ditimpa!`, false);
+        } else {
+          const merged = [...users];
+          newList.forEach(n => {
+            const idx = merged.findIndex(m => m.id_user === n.id_user || m.username.toLowerCase() === n.username.toLowerCase());
+            if (idx > -1) merged[idx] = n;
+            else merged.push(n);
+          });
+          onUpdateUsers(merged);
+          showStatus(`Data Pengguna digabungkan!`, false);
+        }
+      },
+      users.length,
+      handleExportUsers
+    );
   };
 
   const handleImportSettings = () => {
     const cols = ['key', 'value'];
-    importData('settings', 'Settings', cols, (rows) => {
-      const newSettings = { ...settings };
-      rows.forEach(r => {
-        const key = r[0];
-        const val = r[1];
-        if (key === 'tahun_ajaran') newSettings.tahun_ajaran = val;
-        if (key === 'batas_waktu_administrasi') newSettings.batas_waktu_administrasi = val;
-        if (key === 'semester') {
-          newSettings.semester = (val === 'Genap' ? 'Genap' : 'Ganjil') as 'Ganjil' | 'Genap';
-        }
-      });
+    importData(
+      'settings',
+      'Settings',
+      cols,
+      (rows) => {
+        const newSettings = { ...settings };
+        rows.forEach(r => {
+          const key = r[0];
+          const val = r[1];
+          if (key === 'tahun_ajaran') newSettings.tahun_ajaran = val;
+          if (key === 'batas_waktu_administrasi') newSettings.batas_waktu_administrasi = val;
+          if (key === 'semester') {
+            newSettings.semester = (val === 'Genap' ? 'Genap' : 'Ganjil') as 'Ganjil' | 'Genap';
+          }
+        });
 
-      onUpdateSettings(newSettings);
-      showStatus(`Pengaturan sistem berhasil diperbarui dari Google Sheets!`, false);
-    });
+        onUpdateSettings(newSettings);
+        showStatus(`Pengaturan sistem berhasil diperbarui dari Google Sheets!`, false);
+      },
+      1,
+      handleExportSettings
+    );
   };
 
   const handleImportDokumentasi = () => {
     const cols = ['id_dokumentasi', 'tanggal', 'kelas', 'nama_kegiatan', 'foto', 'nama_guru'];
-    importData('dokumentasi', 'Dokumentasi_Kelas', cols, (rows) => {
-      const newList: Dokumentasi[] = rows.map(r => ({
-        id_dokumentasi: r[0],
-        tanggal: r[1],
-        kelas: r[2],
-        nama_kegiatan: r[3],
-        foto: r[4] || '',
-        nama_guru: r[5]
-      })).filter(d => d.id_dokumentasi && d.nama_kegiatan);
+    importData(
+      'dokumentasi',
+      'Dokumentasi_Kelas',
+      cols,
+      (rows) => {
+        const newList: Dokumentasi[] = rows
+          .map((r, idx) => ({
+            id_dokumentasi: r[0] || `doc_${Date.now()}_${idx}`,
+            tanggal: r[1] || new Date().toISOString().substring(0, 10),
+            kelas: r[2] || '7A',
+            nama_kegiatan: r[3] || 'Kegiatan',
+            foto: r[4] || '',
+            nama_guru: r[5] || 'Guru'
+          }))
+          .filter(d => d.nama_kegiatan && d.nama_kegiatan.trim() !== '');
 
-      const decision = window.confirm(`Berhasil membaca ${newList.length} data Dokumentasi. Tekan OK untuk menimpa, atau CANCEL untuk menggabungkan.`);
-      if (decision) {
-        onUpdateDokumentasi(newList);
-        showStatus(`Dokumentasi Kelas berhasil ditimpa!`, false);
-      } else {
-        const merged = [...dokumentasi];
-        newList.forEach(n => {
-          const idx = merged.findIndex(m => m.id_dokumentasi === n.id_dokumentasi);
-          if (idx > -1) merged[idx] = n;
-          else merged.push(n);
-        });
-        onUpdateDokumentasi(merged);
-        showStatus(`Data Dokumentasi digabungkan!`, false);
-      }
-    });
+        if (newList.length === 0) {
+          showStatus(`Tidak ada Dokumentasi Kelas valid yang dapat diimpor dari Google Sheets.`, true);
+          return;
+        }
+
+        const decision = window.confirm(`Berhasil membaca ${newList.length} data Dokumentasi. Tekan OK untuk MENIMPA, atau CANCEL untuk MENGGABUNGKAN.`);
+        if (decision) {
+          onUpdateDokumentasi(newList);
+          showStatus(`Dokumentasi Kelas berhasil ditimpa!`, false);
+        } else {
+          const merged = [...dokumentasi];
+          newList.forEach(n => {
+            const idx = merged.findIndex(m => m.id_dokumentasi === n.id_dokumentasi);
+            if (idx > -1) merged[idx] = n;
+            else merged.push(n);
+          });
+          onUpdateDokumentasi(merged);
+          showStatus(`Data Dokumentasi digabungkan!`, false);
+        }
+      },
+      dokumentasi.length,
+      handleExportDokumentasi
+    );
   };
 
   const handleImportAdministrasi = () => {
     const cols = ['id_file', 'tanggal', 'nama_guru', 'nama_file', 'jenis_file', 'url_file'];
-    importData('administrasi', 'Administrasi_Guru', cols, (rows) => {
-      const newList: Administrasi[] = rows.map(r => ({
-        id_file: r[0],
-        tanggal: r[1],
-        nama_guru: r[2],
-        nama_file: r[3],
-        jenis_file: r[4] as any || 'pdf',
-        url_file: r[5] || ''
-      })).filter(a => a.id_file && a.nama_file);
+    importData(
+      'administrasi',
+      'Administrasi_Guru',
+      cols,
+      (rows) => {
+        const newList: Administrasi[] = rows
+          .map((r, idx) => ({
+            id_file: r[0] || `file_${Date.now()}_${idx}`,
+            tanggal: r[1] || new Date().toISOString().substring(0, 10),
+            nama_guru: r[2] || 'Guru',
+            nama_file: r[3] || 'File',
+            jenis_file: (r[4] as any) || 'pdf',
+            url_file: r[5] || ''
+          }))
+          .filter(a => a.nama_file && a.nama_file.trim() !== '');
 
-      const decision = window.confirm(`Berhasil membaca ${newList.length} file Administrasi. Tekan OK untuk menimpa, atau CANCEL untuk menggabungkan.`);
-      if (decision) {
-        onUpdateAdministrasi(newList);
-        showStatus(`Administrasi Guru berhasil ditimpa!`, false);
-      } else {
-        const merged = [...administrasi];
-        newList.forEach(n => {
-          const idx = merged.findIndex(m => m.id_file === n.id_file);
-          if (idx > -1) merged[idx] = n;
-          else merged.push(n);
-        });
-        onUpdateAdministrasi(merged);
-        showStatus(`Data Administrasi digabungkan!`, false);
-      }
-    });
+        if (newList.length === 0) {
+          showStatus(`Tidak ada file Administrasi valid yang dapat diimpor dari Google Sheets.`, true);
+          return;
+        }
+
+        const decision = window.confirm(`Berhasil membaca ${newList.length} file Administrasi. Tekan OK untuk MENIMPA, atau CANCEL untuk MENGGABUNGKAN.`);
+        if (decision) {
+          onUpdateAdministrasi(newList);
+          showStatus(`Administrasi Guru berhasil ditimpa!`, false);
+        } else {
+          const merged = [...administrasi];
+          newList.forEach(n => {
+            const idx = merged.findIndex(m => m.id_file === n.id_file);
+            if (idx > -1) merged[idx] = n;
+            else merged.push(n);
+          });
+          onUpdateAdministrasi(merged);
+          showStatus(`Data Administrasi digabungkan!`, false);
+        }
+      },
+      administrasi.length,
+      handleExportAdministrasi
+    );
   };
 
   const handleImportJadwal = () => {
     const cols = ['id_jadwal', 'nama_guru', 'hari', 'jam_ke', 'mata_pelajaran', 'kelas', 'status_reminder'];
-    importData('jadwal', 'Jadwal_Guru', cols, (rows) => {
-      const newList: Jadwal[] = rows.map(r => ({
-        id_jadwal: r[0],
-        nama_guru: r[1],
-        hari: r[2],
-        jam_ke: r[3],
-        mata_pelajaran: r[4],
-        kelas: r[5],
-        status_reminder: r[6] as any || 'Aktif'
-      })).filter(j => j.id_jadwal && j.nama_guru);
+    importData(
+      'jadwal',
+      'Jadwal_Guru',
+      cols,
+      (rows) => {
+        const newList: Jadwal[] = rows
+          .map((r, idx) => ({
+            id_jadwal: r[0] || `jdw_${Date.now()}_${idx}`,
+            nama_guru: r[1] || 'Guru',
+            hari: r[2] || 'Senin',
+            jam_ke: r[3] || '1',
+            mata_pelajaran: r[4] || 'Mapel',
+            kelas: r[5] || '7A',
+            status_reminder: (r[6] as any) || 'Aktif'
+          }))
+          .filter(j => j.nama_guru && j.mata_pelajaran);
 
-      const decision = window.confirm(`Berhasil membaca ${newList.length} entri Jadwal Guru. Tekan OK untuk menimpa, atau CANCEL untuk menggabungkan.`);
-      if (decision) {
-        onUpdateJadwal(newList);
-        showStatus(`Jadwal Guru berhasil ditimpa!`, false);
-      } else {
-        const merged = [...jadwal];
-        newList.forEach(n => {
-          const idx = merged.findIndex(m => m.id_jadwal === n.id_jadwal);
-          if (idx > -1) merged[idx] = n;
-          else merged.push(n);
-        });
-        onUpdateJadwal(merged);
-        showStatus(`Jadwal Guru digabungkan!`, false);
-      }
-    });
+        if (newList.length === 0) {
+          showStatus(`Tidak ada Jadwal Guru valid yang dapat diimpor dari Google Sheets.`, true);
+          return;
+        }
+
+        const decision = window.confirm(`Berhasil membaca ${newList.length} entri Jadwal Guru. Tekan OK untuk MENIMPA, atau CANCEL untuk MENGGABUNGKAN.`);
+        if (decision) {
+          onUpdateJadwal(newList);
+          showStatus(`Jadwal Guru berhasil ditimpa!`, false);
+        } else {
+          const merged = [...jadwal];
+          newList.forEach(n => {
+            const idx = merged.findIndex(m => m.id_jadwal === n.id_jadwal);
+            if (idx > -1) merged[idx] = n;
+            else merged.push(n);
+          });
+          onUpdateJadwal(merged);
+          showStatus(`Jadwal Guru digabungkan!`, false);
+        }
+      },
+      jadwal.length,
+      handleExportJadwal
+    );
   };
 
   return (

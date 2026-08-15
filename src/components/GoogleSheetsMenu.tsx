@@ -130,7 +130,7 @@ export const GoogleSheetsMenu: React.FC<GoogleSheetsMenuProps> = ({
           `Domain "${hostname}" belum diizinkan (Authorized Domain) di Firebase Console.\n\n` +
           `Langkah Penyelesaian:\n` +
           `1. Buka Firebase Console (https://console.firebase.google.com)\n` +
-          `2. Pilih project Firebase: decoded-heaven-2r4g1\n` +
+          `2. Pilih project Firebase: jurnal-iribs-v3\n` +
           `3. Buka menu Authentication -> Settings (Setelan) -> Authorized domains (Domain Otorisasi)\n` +
           `4. Klik "Add domain" (Tambah domain) dan tambahkan: ${hostname} (serta "iribs.sch.id")\n` +
           `5. Klik Simpan, lalu coba klik Hubungkan Google kembali.`,
